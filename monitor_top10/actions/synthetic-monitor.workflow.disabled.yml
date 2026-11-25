@@ -1,0 +1,45 @@
+# REVIEW ONLY. Outside .github/workflows. No execution is authorized.
+name: Top 10 synthetic research
+on:
+  workflow_dispatch:
+    inputs:
+      scenario:
+        description: Approved synthetic acceptance scenario
+        required: true
+        type: choice
+        options: [success, cancel]
+      deadline_utc:
+        description: Approved absolute UTC deadline (ISO 8601, Z)
+        required: true
+        type: string
+permissions: {}
+concurrency:
+  group: top10-synthetic-monitor
+  cancel-in-progress: false
+jobs:
+  research:
+    if: ${{ false }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ inputs.scenario == 'cancel' && 3 || 20 }}
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Approved run and synthetic research
+        env:
+          MONITOR_GITHUB_TOKEN: ${{ github.token }}
+          MONITOR_DEADLINE_UTC: ${{ inputs.deadline_utc }}
+          MONITOR_SCENARIO: ${{ inputs.scenario }}
+        run: exec python3 -B -m monitor_top10.actions.runner --github
+      - name: Research report artifact
+        if: ${{ success() && inputs.scenario == 'success' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: top10-synthetic-research
+          path: _monitor/report.json
+          retention-days: 1
+          if-no-files-found: error
