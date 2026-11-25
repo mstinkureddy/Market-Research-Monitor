@@ -26,6 +26,14 @@ class PermitPending(OSError):
     """No permit file exists yet on the verified branch."""
 
 
+class ControlUnavailable(OSError):
+    """Fixed diagnostic category. Never includes a request, response body or credential."""
+
+    def __init__(self, category: str):
+        super().__init__("GitHub control unavailable")
+        self.category = category
+
+
 class NoRedirect(HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -34,7 +42,9 @@ class NoRedirect(HTTPRedirectHandler):
 class GitHubRead:
     """Small allowlist. No write method, arbitrary URL, retry or redirect."""
     def __init__(self, token: str, *, open_request: Callable | None = None):
-        if not re.fullmatch(r"[A-Za-z0-9_]{20,300}", token):
+        # Treat the credential as opaque. Allow GitHub's stateless base64url
+        # segments and legacy tokens, but never whitespace or header delimiters.
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{20,}", token):
             raise ValueError("GitHub token unavailable")
         self._token = token
         self._open = open_request or build_opener(ProxyHandler({}), NoRedirect()).open
@@ -73,9 +83,13 @@ class GitHubRead:
         except HTTPError as error:
             if permit_path and error.code == 404:
                 return None
-            raise OSError("GitHub control unavailable") from None
-        except (ValueError, OSError, RecursionError):
-            raise OSError("GitHub control unavailable") from None
+            category = ("API access denied" if error.code in (401, 403) else
+                        "API object not found" if error.code == 404 else "API HTTP failure")
+            raise ControlUnavailable(category) from None
+        except OSError:
+            raise ControlUnavailable("API transport failure") from None
+        except (ValueError, RecursionError):
+            raise ControlUnavailable("API response invalid") from None
 
 
 class GitHubControl:
@@ -98,6 +112,7 @@ class GitHubControl:
 
     def _read(self, *, completed: bool) -> Control:
         observed = self.clock.now()
+        category = "run metadata invalid"
         try:
             run = self.run
             meta = self.get(f"actions/runs/{run.run_id}")
@@ -108,7 +123,9 @@ class GitHubControl:
                     or meta["status"] != ("completed" if completed else "in_progress")
                     or meta["conclusion"] != ("success" if completed else None)):
                 raise ValueError
+            category = "protected control ref invalid"
             sha = self._branch(CONTROL_BRANCH)
+            category = "permit file invalid"
             path = f"monitor-control/{run.run_id}.json"
             file = self.get(f"contents/{path}", revision=sha)
             if file is None:
@@ -122,10 +139,12 @@ class GitHubControl:
             if len(raw) > _PERMIT_LIMIT:
                 raise ValueError
             body = decode_object(raw)
+            category = "owner signature invalid"
             signature = self.get(f"commits/{sha}")
             if (signature["sha"] != sha or signature["author"]["login"] != OPERATOR
                     or signature["commit"]["verification"]["verified"] is not True):
                 raise ValueError
+            category = "permit scope invalid"
             expected = {"schema": 1, "repository": REPOSITORY, "workflow": WORKFLOW, "run_id": run.run_id,
                         "attempt": 1, "commit": run.commit}
             if (set(body) != set(expected) | {"synthetic", "enabled", "symbols", "opens", "expires", "scenario"}
@@ -139,17 +158,19 @@ class GitHubControl:
                             parse_stamp(body["opens"]), parse_stamp(body["expires"]), body["scenario"])
             if not valid_permit(permit, run) or permit.opens.microsecond or permit.expires.microsecond:
                 raise ValueError
+            category = "permit history invalid"
             if body["enabled"]:
                 # On the required linear, non-rewritable control ref, an ON permit may only be created once.
                 created, = self.get(f"permit-history/{run.run_id}", revision=sha)
                 if (created["author"]["login"] != OPERATOR
                         or created["commit"]["verification"]["verified"] is not True):
                     raise ValueError
+            category = "protected ref binding invalid"
             if self._branch(CONTROL_BRANCH) != sha or self._branch(APPROVED_REF.removeprefix("refs/heads/")) != run.commit:
                 raise ValueError
             return Control(True, observed, body["enabled"], permit)
         except (AttributeError, binascii.Error, KeyError, TypeError, ValueError, RecursionError, OverflowError):
-            raise OSError("GitHub approval unverified") from None
+            raise ControlUnavailable(category) from None
 
     def completed_proof(self) -> Provenance:
         """Read the known run, its current signed permit and its single terminal job."""

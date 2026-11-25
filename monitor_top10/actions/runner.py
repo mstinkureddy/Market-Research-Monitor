@@ -9,7 +9,7 @@ from time import monotonic
 from uuid import uuid4
 
 from .batch import Batch, Control, Permit, Result, Run, SIGNED_OFF
-from .github import GitHubControl, GitHubRead, PermitPending, workflow_run
+from .github import ControlUnavailable, GitHubControl, GitHubRead, PermitPending, workflow_run
 from .report import Provenance, review, stage, utc
 from ..fixtures import FakeClock
 
@@ -147,10 +147,13 @@ def main() -> int:
 
         for signum in (signal.SIGINT, signal.SIGTERM):
             signal.signal(signum, interrupt)
+        startup_stage = "workflow environment invalid"
         try:
             run = workflow_run(os.environ, clock.now())
+            startup_stage = "credential format invalid"
             reader = GitHubRead(os.environ.pop("MONITOR_GITHUB_TOKEN", ""))
             control = GitHubControl(run, clock, reader.get)
+            startup_stage = "permit unavailable or not armed"
             approval = wait_for_permit(control, clock, run.job_deadline, stop, cancellation=run.scenario == "cancel")
 
             def read_bound():
@@ -159,6 +162,7 @@ def main() -> int:
                     raise OSError("run approval changed")
                 return snapshot
 
+            startup_stage = "synthetic batch stopped"
             batch = Batch(run, clock, read_bound)
             if stop.is_set():
                 batch.stop()
@@ -168,8 +172,10 @@ def main() -> int:
                 if result.status == "COMPLETED":
                     (args.output / "report.json").unlink(missing_ok=True)
                 result = Result("STOPPED", "local cancellation observed")
+        except ControlUnavailable as error:
+            result = Result("STOPPED", error.category)
         except (OSError, ValueError):
-            result = Result("STOPPED", "workflow or run approval unverified")
+            result = Result("STOPPED", startup_stage)
     print(f"{result.status} · {result.reason}")
     return 0 if result.status == "COMPLETED" else 78
 

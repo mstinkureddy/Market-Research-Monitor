@@ -247,6 +247,39 @@ class GitHubRelease(unittest.TestCase):
             wait_for_permit(control, self.clock, expired, Event())
         self.assertEqual(control.read.call_count, 2)
 
+    def test_stateless_installation_token_reaches_read_only_rest_checks(self):
+        from urllib.parse import parse_qs, urlsplit
+
+        # Synthetic bearer with the provider's dotted, base64url and >300-character shape.
+        credential = "ghs_1234_" + "A" * 64 + "." + "b_" * 120 + "." + "c-" * 80
+
+        def transport(request, timeout):
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(request.get_header("Authorization"), "Bearer " + credential)
+            url = urlsplit(request.full_url)
+            self.assertEqual(url.netloc, "api.github.com")
+            route = url.path.removeprefix(f"/repos/{REPOSITORY}/")
+            query = parse_qs(url.query)
+            if route == "commits":
+                self.assertEqual(query["path"], ["monitor-control/137.json"])
+                value = self.get("permit-history/137", revision=query["sha"][0])
+            else:
+                value = self.get(route, revision=query.get("ref", [None])[0])
+            return BytesIO(json.dumps(value).encode())
+
+        run = workflow_run(self.env, self.now)
+        client = GitHubRead(credential, open_request=transport)
+        approve = wait_for_permit(GitHubControl(run, self.clock, client.get), self.clock,
+                                  run.job_deadline, Event())
+        self.assertEqual(approve.permit, self.scope)
+
+    def test_token_header_injection_is_rejected_without_transport(self):
+        transport = Mock()
+        for delimiter in (" ", "\r", "\n"):
+            with self.assertRaises(ValueError):
+                GitHubRead("a" * 24 + delimiter + "b" * 24, open_request=transport)
+        transport.assert_not_called()
+
     def test_http_allowlist_refuses_writes_arbitrary_urls_redirects_and_leaks(self):
         transport = Mock(return_value=BytesIO(b"{}"))
         client = GitHubRead(self.env["MONITOR_GITHUB_TOKEN"], open_request=transport)
