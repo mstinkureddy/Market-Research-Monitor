@@ -1,0 +1,1 @@
+{"schema":1,"repository":"mstinkureddy/Market-Research-Monitor","workflow":".github/workflows/top10-synthetic-research.yml","run_id":"45719969526","attempt":1,"commit":"4e7b0a8c15a552fd420b0ee896a2e7a8518acf6f","enabled":true,"synthetic":true,"symbols":["F00","F01","F02"],"opens":"2026-11-25T23:15:00Z","expires":"2026-11-25T23:35:00Z","scenario":"success"}
