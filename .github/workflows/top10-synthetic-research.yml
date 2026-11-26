@@ -35,11 +35,32 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Approved run and synthetic research
+        if: ${{ inputs.scenario == 'success' }}
         env:
           MONITOR_GITHUB_TOKEN: ${{ github.token }}
           MONITOR_DEADLINE_UTC: ${{ inputs.deadline_utc }}
           MONITOR_SCENARIO: ${{ inputs.scenario }}
         run: exec python3 -B -m monitor_top10.actions.runner --github
+      - name: Test B ARMED
+        if: ${{ success() && inputs.scenario == 'cancel' }}
+        env:
+          MONITOR_GITHUB_TOKEN: ${{ github.token }}
+          MONITOR_DEADLINE_UTC: ${{ inputs.deadline_utc }}
+          MONITOR_SCENARIO: ${{ inputs.scenario }}
+        run: exec python3 -B -m monitor_top10.actions.cancel_probe armed
+      - name: Test B SIGNED OFF
+        if: ${{ success() && inputs.scenario == 'cancel' }}
+        env:
+          MONITOR_GITHUB_TOKEN: ${{ github.token }}
+          MONITOR_DEADLINE_UTC: ${{ inputs.deadline_utc }}
+          MONITOR_SCENARIO: ${{ inputs.scenario }}
+        run: exec python3 -B -m monitor_top10.actions.cancel_probe off
+      - name: Test B CANCELLATION WINDOW
+        if: ${{ success() && inputs.scenario == 'cancel' }}
+        env:
+          MONITOR_DEADLINE_UTC: ${{ inputs.deadline_utc }}
+          MONITOR_SCENARIO: ${{ inputs.scenario }}
+        run: exec python3 -B -m monitor_top10.actions.cancel_probe idle
       - name: Research report artifact
         if: ${{ success() && inputs.scenario == 'success' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
